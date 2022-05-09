@@ -32,7 +32,7 @@ proc readFasta(infile: string): Table[string, string] =
   var seqName = ""
   for ll in lines infile:
     if contains(ll, ">"):
-      seqName = ll.replace(">", "")
+      seqName = ll.replace(">", "").split(" ")[0] # in case there are annotation in the name
       seqDict[seqName] = ""
     else:
       seqDict[seqName].add(ll)
@@ -194,6 +194,14 @@ for j in 2 .. inputFiles.len-1:
           # echo "potential big deletion"
           # echo allPos1
           # echo allPos2
+          if allPos1[0] > allPos2[1] or allPos1[3] >= allPos2[2]: # read split fragment order reversed
+            echo "NOT potential big deletion"
+            echo chrom
+            echo cigar
+            echo readID
+            echo allPos1
+            echo allPos2
+            continue
           let
             readPos1 = allPos1[1]
             refPos1  = allPos1[3]
