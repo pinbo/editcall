@@ -1,7 +1,5 @@
-## version 1: inversion direction was checked by Read1 vs Read2, which is only correct for my fastqs for CRISPR NGS
-## version 2: inversion direction was checked by read segment
-## version 3: add depth and percent of mutation in all reads
-## todo: handle big insertions and SNPs
+## v0.2.0: add calling SNPs: at least 10% of reads have the SNP to avoid random mutations
+## todo: handle big insertions and update SNP selection criteria.
 
 ## modules
 import std/tables
@@ -11,7 +9,7 @@ import os
 # import std/parseopt
 
 proc writeHelp() =
-  quit("editcall v0.1.0\nUsage: ./editcall reference.fa output.txt samfile1.sam samfile2.sam [...more samfiles]")
+  quit("editcall v0.2.0\nUsage: ./editcall reference.fa output.txt samfile1.sam samfile2.sam [...more samfiles]")
 
 let inputFiles = commandLineParams()
 echo inputFiles
@@ -35,7 +33,7 @@ proc readFasta(infile: string): Table[string, string] =
       seqName = ll.replace(">", "").split(" ")[0] # in case there are annotation in the name
       seqDict[seqName] = ""
     else:
-      seqDict[seqName].add(ll)
+      seqDict[seqName].add(ll.toUpperAscii)
   return seqDict
 
 ## split cigar
@@ -130,12 +128,14 @@ for j in 2 .. inputFiles.len-1:
       var refPos = pos # 0-based
       var depStart = pos # 0-based, define the region that is mapped
       var depRange: seq[int] # all positions with coverage
+      var readRange: seq[int] # all positions in the read, to compare with depRange to see any SNPs
       # check if there is insertion or deletion
       # if ('I' in cigar or 'D' in cigar or 'N' in cigar) or ("SA:Z" in line and 'H' notin cigar):
       let (ss1, ss2) = cigar.mysplit #@["M", "D", "M", "S"], @[60, 5, 56, 26]
       for i in 0 .. ss1.len-1:
         let num = ss2[i]
         if ss1[i] == 'M' or ss1[i] == '=' or ss1[i] == 'X':
+          readRange.add(to_seq(readPos .. readPos+num-1))
           readPos += num
           refPos += num
           rawReadPos += num
@@ -170,8 +170,17 @@ for j in 2 .. inputFiles.len-1:
           refPos += num
           depStart += num
       # add coverage
-      for tmpPos in depRange:
+      for index, tmpPos in depRange:
         depthDict[chrom][tmpPos] += 1
+        let tmpReadPos = readRange[index]
+        let refSeq = seqDict[chrom][tmpPos..tmpPos]
+        let altSeq = readSeq[tmpReadPos..tmpReadPos]
+        if refSeq != altSeq:
+          kk = @[samFile, chrom, $(tmpPos+1), $(tmpPos+1), refSeq, altSeq, "0"].join("\t")
+          if kk in indelDict:
+            indelDict[kk] += 1
+          else:
+            indelDict[kk] = 1
       # check if having supplementary read
       # SA:Z:6B,185,-,54S62M26S,10,0;
       if "SA:Z" in line and 'H' notin cigar: # only when the read has no hard clip, eg. read is raw
@@ -279,10 +288,13 @@ for j in 2 .. inputFiles.len-1:
       chrom = ss[1]
       n1 = ss[2].parseInt - 1
       n2 = ss[3].parseInt - 1
+      n3 = ss[6] # mutsize
       dep1 = depthDict[chrom][n1]
       dep2 = depthDict[chrom][n2]
     let cov = if dep1 > dep2: dep1 else: dep2
     let pct = v / cov * 100
+    if n3 == "0" and pct < 10.0: # snp at least has 10% of the reads
+      continue
     f.writeLine(k & "\t" & $cov & "\t" & $v & "\t" & $pct)
 
 ## print at the end
